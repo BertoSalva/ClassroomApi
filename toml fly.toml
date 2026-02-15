@@ -1,0 +1,13 @@
+app = "classroom-api" # change if needed
+primary_region = "iad"
+
+[build]
+  image = "registry.fly.io/classroom-api:latest"
+
+[[mounts]]
+  source = "uploads"
+  destination = "/app/App_Data/uploads"
+
+[env]
+  # you can put defaults here; secrets should be set via flyctl secrets set
+  ASPNETCORE_ENVIRONMENT = "Production"

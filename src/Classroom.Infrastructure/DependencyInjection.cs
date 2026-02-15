@@ -1,5 +1,6 @@
 using Classroom.Application.Abstractions;
 using Classroom.Infrastructure.Auth;
+using Classroom.Infrastructure.Email;
 using Classroom.Infrastructure.Identity;
 using Classroom.Infrastructure.Persistence;
 using Classroom.Infrastructure.Storage;
@@ -17,6 +18,10 @@ public static class DependencyInjection
     {
         services.Configure<JwtOptions>(config.GetSection("Jwt"));
         services.Configure<LocalFileStorageOptions>(config.GetSection("Storage"));
+
+        // Email config (optional)
+        services.Configure<EmailOptions>(config.GetSection("Email"));
+        services.AddTransient<IEmailService, EmailService>();
 
         var conn = config.GetConnectionString("DefaultConnection")
                    ?? config["DATABASE_URL"]; 
@@ -40,6 +45,7 @@ public static class DependencyInjection
             })
             .AddRoles<IdentityRole>()
             .AddEntityFrameworkStores<AppDbContext>()
+            .AddDefaultTokenProviders()   // <-- ADDED: registers DataProtection token provider used by GeneratePasswordResetTokenAsync
             .AddSignInManager<SignInManager<ApplicationUser>>();
 
      

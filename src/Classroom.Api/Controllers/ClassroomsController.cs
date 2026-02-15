@@ -40,54 +40,20 @@ public class ClassroomsController : ControllerBase
     // shared seeded categories (fallback)
     private static readonly string[] DefaultCategories = new[] { "Past Papers", "Revision", "Class work" };
 
-    // Existing authenticated endpoint that returns classes for current user
+    // Existing authenticated endpoint updated to return all classrooms (no role filtering)
     [HttpGet]
     [Authorize]
     public async Task<IActionResult> MyClasses()
     {
-        var appUser = await GetCurrentUserAsync();
-        if (appUser is null) return Unauthorized();
-
-        var userId = appUser.Id;
-
-        if (User.IsInRole(AppRole.Teacher))
-        {
-            // materialize before projecting to avoid jsonb -> text[] SQL cast
-            var groups = await _db.ClassroomGroups
-                .Where(x => x.TeacherUserId == userId)
-                .Include(x => x.Grade)
-                .Include(x => x.Subject)
-                .AsNoTracking()
-                .ToListAsync();
-
-            var classes = groups
-                .Select(x => new ClassroomDto(
-                    x.Id,
-                    x.Name,
-                    x.GradeId,
-                    x.Grade != null ? x.Grade.Name : string.Empty,
-                    x.SubjectId,
-                    x.Subject != null ? x.Subject.Name : string.Empty,
-                    (x.Categories != null && x.Categories.Any()) ? x.Categories : DefaultCategories
-                ))
-                .ToList();
-
-            return Ok(classes);
-        }
-
-        var enrolled = await _db.Enrollments
-            .Where(e => e.LearnerUserId == userId)
-            .Select(e => e.ClassroomGroupId)
-            .ToListAsync();
-
-        var learnerGroups = await _db.ClassroomGroups
-            .Where(x => enrolled.Contains(x.Id))
+        // Fetch all classroom groups and project to DTOs — no role checks or enrollment filtering.
+        var groups = await _db.ClassroomGroups
             .Include(x => x.Grade)
             .Include(x => x.Subject)
             .AsNoTracking()
+            .OrderBy(x => x.Name)
             .ToListAsync();
 
-        var learnerClasses = learnerGroups
+        var classes = groups
             .Select(x => new ClassroomDto(
                 x.Id,
                 x.Name,
@@ -99,7 +65,7 @@ public class ClassroomsController : ControllerBase
             ))
             .ToList();
 
-        return Ok(learnerClasses);
+        return Ok(classes);
     }
 
     // New: public endpoint that returns all classrooms (no role / id checks)

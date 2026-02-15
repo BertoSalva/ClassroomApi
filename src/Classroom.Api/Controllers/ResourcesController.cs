@@ -6,6 +6,9 @@ using Classroom.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Identity;
+using Classroom.Infrastructure.Identity;
 
 namespace Classroom.Api.Controllers;
 
@@ -15,35 +18,50 @@ public class ResourcesController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IFileStorage _storage;
+    private readonly UserManager<ApplicationUser> _userManager;
 
-    public ResourcesController(AppDbContext db, IFileStorage storage)
+    public ResourcesController(AppDbContext db, IFileStorage storage, UserManager<ApplicationUser> userManager)
     {
         _db = db;
         _storage = storage;
+        _userManager = userManager;
+    }
+
+    private async Task<ApplicationUser?> GetCurrentUserAsync()
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+                  ?? User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)
+                  ?? User.FindFirstValue("sub");
+
+        if (string.IsNullOrWhiteSpace(userId)) return null;
+        return await _userManager.FindByIdAsync(userId);
     }
 
     [HttpPost("{classroomId:int}/upload")]
     [Authorize(Roles = AppRole.SuperAdmin + "," + AppRole.Teacher)]
     [RequestSizeLimit(30_000_000)]
-    public async Task<ActionResult<UploadResourceResponse>> Upload(int classroomId, [FromForm] string title, [FromForm] IFormFile file, CancellationToken ct)
+    public async Task<ActionResult<UploadResourceResponse>> Upload(
+        int classroomId,
+        [FromForm] string title,
+        [FromForm] string category,
+        [FromForm] IFormFile file,
+        CancellationToken ct)
     {
-        if (file is null || file.Length == 0) return BadRequest("File is required.");
+        if (file is null || file.Length == 0)
+            return BadRequest("File is required.");
+
         if (!string.Equals(file.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase))
             return BadRequest("Only application/pdf is allowed.");
 
         var classroom = await _db.ClassroomGroups.FirstOrDefaultAsync(x => x.Id == classroomId, ct);
-        if (classroom is null) return NotFound("Classroom not found.");
+        if (classroom is null)
+            return NotFound("Classroom not found.");
 
-        // Teacher can only upload to own class
-        if (User.IsInRole(AppRole.Teacher))
-        {
-            var sub = User.FindFirst("sub")?.Value;
-            if (!string.Equals(sub, classroom.TeacherUserId, StringComparison.Ordinal))
-                return Forbid();
-        }
+        var appUser = await GetCurrentUserAsync();
+        if (appUser is null)
+            return Unauthorized();
 
-        var userId = User.FindFirst("sub")?.Value;
-        if (string.IsNullOrWhiteSpace(userId)) return Unauthorized();
+        var userId = appUser.Id;
 
         await using var stream = file.OpenReadStream();
         var (stored, sizeBytes, contentType) = await _storage.SavePdfAsync(stream, file.FileName, file.ContentType, ct);
@@ -52,11 +70,13 @@ public class ResourcesController : ControllerBase
         {
             ClassroomGroupId = classroomId,
             Title = string.IsNullOrWhiteSpace(title) ? Path.GetFileNameWithoutExtension(file.FileName) : title.Trim(),
+            Category = string.IsNullOrWhiteSpace(category) ? "Past Papers" : category.Trim(),
             StoredFileName = stored,
             OriginalFileName = file.FileName,
             ContentType = contentType,
             SizeBytes = sizeBytes,
-            UploadedByUserId = userId
+            UploadedByUserId = userId,
+            UploadedAt = DateTimeOffset.UtcNow
         };
 
         _db.ResourceFiles.Add(res);
@@ -73,10 +93,14 @@ public class ResourcesController : ControllerBase
             .Include(r => r.ClassroomGroup)
             .FirstOrDefaultAsync(r => r.Id == resourceId, ct);
 
-        if (resource is null) return NotFound("Resource not found.");
+        if (resource is null)
+            return NotFound("Resource not found.");
 
-        var userId = User.FindFirst("sub")?.Value;
-        if (string.IsNullOrWhiteSpace(userId)) return Unauthorized();
+        var appUser = await GetCurrentUserAsync();
+        if (appUser is null)
+            return Unauthorized();
+
+        var userId = appUser.Id;
 
         // Access control:
         // - SuperAdmin can download anything
@@ -89,15 +113,19 @@ public class ResourcesController : ControllerBase
         }
         else if (User.IsInRole(AppRole.Learner))
         {
-            var enrolled = await _db.Enrollments.AnyAsync(e => e.ClassroomGroupId == resource.ClassroomGroupId && e.LearnerUserId == userId, ct);
-            if (!enrolled) return Forbid();
+            var enrolled = await _db.Enrollments.AnyAsync(
+                e => e.ClassroomGroupId == resource.ClassroomGroupId && e.LearnerUserId == userId, ct);
+            if (!enrolled)
+                return Forbid();
         }
 
-        var (stream, contentType, downloadName) = await _storage.OpenReadAsync(resource.StoredFileName, resource.OriginalFileName, ct);
-        return File(stream, contentType, downloadName, enableRangeProcessing: true);
+        var (stream, downloadContentType, downloadName) = await _storage.OpenReadAsync(
+            resource.StoredFileName,
+            resource.OriginalFileName,
+            ct);
+        return File(stream, downloadContentType, downloadName, enableRangeProcessing: true);
     }
 
-    // New endpoint: list all resources (public)
     [HttpGet("all")]
     [AllowAnonymous]
     public async Task<IActionResult> GetAllResources(CancellationToken ct)
@@ -109,6 +137,7 @@ public class ResourcesController : ControllerBase
             {
                 r.Id,
                 r.Title,
+                r.Category,
                 r.OriginalFileName,
                 r.SizeBytes,
                 r.ContentType,
@@ -128,7 +157,15 @@ public class ResourcesController : ControllerBase
         var resources = await _db.ResourceFiles
             .Where(r => r.ClassroomGroupId == classroomId)
             .OrderByDescending(r => r.UploadedAt)
-            .Select(r => new { r.Id, r.Title, r.OriginalFileName, r.SizeBytes, r.UploadedAt })
+            .Select(r => new
+            {
+                r.Id,
+                r.Title,
+                r.Category,
+                r.OriginalFileName,
+                r.SizeBytes,
+                r.UploadedAt
+            })
             .ToListAsync(ct);
 
         return Ok(resources);

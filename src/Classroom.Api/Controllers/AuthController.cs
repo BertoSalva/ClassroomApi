@@ -1,11 +1,13 @@
 using Classroom.Application.DTOs;
 using Classroom.Domain.Enums;
 using Classroom.Infrastructure.Auth;
+using Classroom.Infrastructure.Email;
 using Classroom.Infrastructure.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Net;
 
 namespace Classroom.Api.Controllers;
 
@@ -17,17 +19,20 @@ public class AuthController : ControllerBase
     private readonly RoleManager<IdentityRole> _roleManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IJwtTokenService _jwt;
+    private readonly IEmailService _emailService;
 
     public AuthController(
         UserManager<ApplicationUser> userManager,
         RoleManager<IdentityRole> roleManager,
         SignInManager<ApplicationUser> signInManager,
-        IJwtTokenService jwt)
+        IJwtTokenService jwt,
+        IEmailService emailService)
     {
         _userManager = userManager;
         _roleManager = roleManager;
         _signInManager = signInManager;
         _jwt = jwt;
+        _emailService = emailService;
     }
 
     [AllowAnonymous]
@@ -87,4 +92,47 @@ public class AuthController : ControllerBase
         var (token, expiresAt) = await _jwt.CreateAsync(user);
         return Ok(new AuthResponse(token, expiresAt));
     }
-}
+
+    // POST api/v1/auth/forgot-password
+    [AllowAnonymous]
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req?.Email))
+            return BadRequest("Email is required.");
+
+        var user = await _userManager.FindByEmailAsync(req.Email);
+        // Do not reveal whether the email exists
+        if (user is null)
+            return Ok();
+
+        var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+        // Send email (service will url-encode token)
+        await _emailService.SendPasswordResetAsync(user.Email, token);
+
+        return Ok();
+    }
+
+    // POST api/v1/auth/reset-password
+    [AllowAnonymous]
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req?.Email) ||
+            string.IsNullOrWhiteSpace(req?.Token) ||
+            string.IsNullOrWhiteSpace(req?.NewPassword))
+            return BadRequest("Email, token and new password are required.");
+
+        var user = await _userManager.FindByEmailAsync(req.Email);
+        if (user is null) return BadRequest("Invalid request.");
+
+        // Token should arrive URL-decoded by client; ensure safe decoding here
+        var decodedToken = WebUtility.UrlDecode(req.Token);
+
+        var result = await _userManager.ResetPasswordAsync(user, decodedToken, req.NewPassword);
+        if (!result.Succeeded)
+            return BadRequest(result.Errors);
+
+        return Ok();
+    }
+    }
