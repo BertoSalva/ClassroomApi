@@ -10,7 +10,6 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
 using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.Http;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -132,32 +131,12 @@ var logger = app.Services.GetRequiredService<ILogger<Program>>();
 var configuredCors = builder.Configuration["Cors:AllowedOrigins"] ?? "<none>";
 logger.LogInformation("Configured CORS AllowedOrigins: {Origins}", configuredCors);
 
-// TEMPORARY DEBUG: ensure OPTIONS requests get CORS headers if something is mis-wiring the middleware.
-// Keep this only for debugging — remove once root cause is found.
-app.Use(async (context, next) =>
-{
-    if (string.Equals(context.Request.Method, HttpMethods.Options, StringComparison.OrdinalIgnoreCase))
-    {
-        var origin = context.Request.Headers["Origin"].ToString();
-        if (!string.IsNullOrEmpty(origin))
-        {
-            // Echo the Origin if present (temporary, for debugging only)
-            context.Response.Headers["Access-Control-Allow-Origin"] = origin;
-            context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
-            var reqHeaders = context.Request.Headers["Access-Control-Request-Headers"].ToString();
-            context.Response.Headers["Access-Control-Allow-Headers"] = string.IsNullOrEmpty(reqHeaders) ? "Content-Type, Authorization" : reqHeaders;
-            // If you don't use credentials, do NOT set Allow-Credentials. If you do, set and ensure WithOrigins is not "*".
-            // context.Response.Headers["Access-Control-Allow-Credentials"] = "true";
-        }
-        context.Response.StatusCode = StatusCodes.Status204NoContent;
-        await context.Response.CompleteAsync();
-        return;
-    }
-
-    await next();
-});
-
 app.UseForwardedHeaders();
+
+//
+// Move CORS early in the pipeline so preflight/responses include headers from the app
+//
+app.UseCors("Frontend");
 
 app.UseSwagger();
 app.UseSwaggerUI(c =>
@@ -168,11 +147,6 @@ app.UseSwaggerUI(c =>
 });
 
 app.UseHttpsRedirection();
-
-//
-// Enable CORS
-//
-app.UseCors("Frontend");
 
 app.UseAuthentication();
 app.UseAuthorization();

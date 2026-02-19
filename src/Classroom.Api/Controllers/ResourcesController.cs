@@ -38,15 +38,11 @@ public class ResourcesController : ControllerBase
     }
 
     [HttpPost("{classroomId:int}/upload")]
-    [Authorize(Roles = AppRole.SuperAdmin + "," + AppRole.Teacher)]
     [RequestSizeLimit(30_000_000)]
-    public async Task<ActionResult<UploadResourceResponse>> Upload(
-        int classroomId,
-        [FromForm] string title,
-        [FromForm] string category,
-        [FromForm] IFormFile file,
-        CancellationToken ct)
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<UploadResourceResponse>> Upload(int classroomId, [FromForm] UploadResourceRequest req, CancellationToken ct)
     {
+        var file = req.File;
         if (file is null || file.Length == 0)
             return BadRequest("File is required.");
 
@@ -69,8 +65,8 @@ public class ResourcesController : ControllerBase
         var res = new ResourceFile
         {
             ClassroomGroupId = classroomId,
-            Title = string.IsNullOrWhiteSpace(title) ? Path.GetFileNameWithoutExtension(file.FileName) : title.Trim(),
-            Category = string.IsNullOrWhiteSpace(category) ? "Past Papers" : category.Trim(),
+            Title = string.IsNullOrWhiteSpace(req.Title) ? Path.GetFileNameWithoutExtension(file.FileName) : req.Title.Trim(),
+            Category = string.IsNullOrWhiteSpace(req.Category) ? "Past Papers" : req.Category.Trim(),
             StoredFileName = stored,
             OriginalFileName = file.FileName,
             ContentType = contentType,
@@ -170,4 +166,11 @@ public class ResourcesController : ControllerBase
 
         return Ok(resources);
     }
+}
+
+public class UploadResourceRequest
+{
+    [FromForm] public string Title { get; set; } = string.Empty;
+    [FromForm] public string Category { get; set; } = string.Empty;
+    [FromForm] public IFormFile File { get; set; } = default!;
 }
