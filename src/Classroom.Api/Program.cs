@@ -1,3 +1,4 @@
+using Amazon;
 using Classroom.Domain.Enums;
 using Classroom.Infrastructure;
 using Classroom.Infrastructure.Identity;
@@ -10,8 +11,18 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
 using System.Text.Json.Serialization;
+using MediatR;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Diagnostic: enable AWS SDK console logging (temporary) — prints to terminal when running `dotnet run`
+Amazon.AWSConfigs.LoggingConfig.LogTo = Amazon.LoggingOptions.Console;
+Amazon.AWSConfigs.LoggingConfig.LogResponses = Amazon.ResponseLoggingOption.Always;
+Amazon.AWSConfigs.LoggingConfig.LogMetrics = true;
+
+// Ensure System.Diagnostics output is visible in Visual Studio Output window
+System.Diagnostics.Trace.Listeners.Add(new System.Diagnostics.DefaultTraceListener());
+System.Diagnostics.Trace.AutoFlush = true;
 
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
@@ -124,6 +135,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownProxies.Clear();
 });
 
+
 var app = builder.Build();
 
 // Debug: log the configured CORS origin string so we can confirm the running container read the secret
@@ -214,4 +226,13 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-app.Run();      
+// Diagnostic: confirm NeonStorage values (do NOT print secrets)
+var neon = builder.Configuration.GetSection("NeonStorage");
+var accessKey = neon["AccessKey"];
+app.Logger.LogInformation("NeonStorage Endpoint={Endpoint}, Bucket={Bucket}, AccessKeyPresent={HasKey}, AccessKeyLength={Len}",
+    neon["Endpoint"] ?? "<null>",
+    neon["Bucket"] ?? "<null>",
+    !string.IsNullOrEmpty(accessKey),
+    accessKey?.Length ?? 0);
+
+app.Run();

@@ -4,7 +4,8 @@
       "commandName": "Project",
       "launchBrowser": true,
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "GOOGLE_APPLICATION_CREDENTIALS": "C:\\Users\\NoluthandoDlamini\\Downloads\\secret\\geo-stamp-443018-13eeffc4ee79.json"
       },
       "applicationUrl": "https://localhost:49213;http://localhost:49214"
     }

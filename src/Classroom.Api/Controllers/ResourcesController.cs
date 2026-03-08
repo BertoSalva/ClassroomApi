@@ -2,13 +2,18 @@ using Classroom.Application.Abstractions;
 using Classroom.Application.DTOs;
 using Classroom.Domain.Entities;
 using Classroom.Domain.Enums;
+using Classroom.Infrastructure.FileStorage;
+using Classroom.Infrastructure.Identity;
 using Classroom.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System;
+using System.IO;
 using System.Security.Claims;
-using Microsoft.AspNetCore.Identity;
-using Classroom.Infrastructure.Identity;
+using System.Threading;
+using Microsoft.AspNetCore.Http;
 
 namespace Classroom.Api.Controllers;
 
@@ -42,36 +47,56 @@ public class ResourcesController : ControllerBase
     [Consumes("multipart/form-data")]
     public async Task<ActionResult<UploadResourceResponse>> Upload(int classroomId, [FromForm] UploadResourceRequest req, CancellationToken ct)
     {
-        var file = req.File;
+        var file = req?.File;
+        var title = req?.Title ?? string.Empty;
+        var category = req?.Category ?? string.Empty;
+
         if (file is null || file.Length == 0)
             return BadRequest("File is required.");
 
-        if (!string.Equals(file.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase))
-            return BadRequest("Only application/pdf is allowed.");
+        // Allowed mime types/extensions
+        var allowedMimeTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "application/pdf",
+            "application/zip",
+            "application/x-zip-compressed",
+            "application/octet-stream", // some clients
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "image/png",
+            "image/jpeg"
+        };
+
+        var allowedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".pdf", ".zip", ".doc", ".docx", ".png", ".jpg", ".jpeg"
+        };
+
+        var ext = Path.GetExtension(file.FileName ?? string.Empty);
+        if (!allowedExtensions.Contains(ext) || !allowedMimeTypes.Contains(file.ContentType ?? ""))
+            return BadRequest("File type not allowed. Allowed: pdf, zip, doc, docx, png, jpg.");
 
         var classroom = await _db.ClassroomGroups.FirstOrDefaultAsync(x => x.Id == classroomId, ct);
         if (classroom is null)
             return NotFound("Classroom not found.");
 
-        var appUser = await GetCurrentUserAsync();
-        if (appUser is null)
-            return Unauthorized();
+        
 
-        var userId = appUser.Id;
 
         await using var stream = file.OpenReadStream();
-        var (stored, sizeBytes, contentType) = await _storage.SavePdfAsync(stream, file.FileName, file.ContentType, ct);
+        // Generic save for arbitrary file types
+        var (stored, sizeBytes, contentType) = await _storage.SaveFileAsync(stream, file.FileName, file.ContentType ?? "application/octet-stream", ct);
 
         var res = new ResourceFile
         {
             ClassroomGroupId = classroomId,
-            Title = string.IsNullOrWhiteSpace(req.Title) ? Path.GetFileNameWithoutExtension(file.FileName) : req.Title.Trim(),
-            Category = string.IsNullOrWhiteSpace(req.Category) ? "Past Papers" : req.Category.Trim(),
+            Title = string.IsNullOrWhiteSpace(title) ? Path.GetFileNameWithoutExtension(file.FileName) : title.Trim(),
+            Category = string.IsNullOrWhiteSpace(category) ? "Past Papers" : category.Trim(),
             StoredFileName = stored,
             OriginalFileName = file.FileName,
             ContentType = contentType,
             SizeBytes = sizeBytes,
-            UploadedByUserId = userId,
+            UploadedByUserId = "",
             UploadedAt = DateTimeOffset.UtcNow
         };
 
@@ -82,44 +107,35 @@ public class ResourcesController : ControllerBase
     }
 
     [HttpGet("{resourceId:int}/download")]
-    [Authorize]
+    [AllowAnonymous]
     public async Task<IActionResult> Download(int resourceId, CancellationToken ct)
     {
         var resource = await _db.ResourceFiles
-            .Include(r => r.ClassroomGroup)
             .FirstOrDefaultAsync(r => r.Id == resourceId, ct);
 
         if (resource is null)
-            return NotFound("Resource not found.");
+            return NotFound(new { message = "Resource not found." });
 
-        var appUser = await GetCurrentUserAsync();
-        if (appUser is null)
-            return Unauthorized();
+        if (string.IsNullOrWhiteSpace(resource.StoredFileName))
+            return BadRequest(new { message = "File reference is missing. Resource may be corrupted." });
 
-        var userId = appUser.Id;
-
-        // Access control:
-        // - SuperAdmin can download anything
-        // - Teacher can download resources of their class
-        // - Learner can download if enrolled
-        if (User.IsInRole(AppRole.Teacher))
+        try
         {
-            if (resource.ClassroomGroup is null || resource.ClassroomGroup.TeacherUserId != userId)
-                return Forbid();
-        }
-        else if (User.IsInRole(AppRole.Learner))
-        {
-            var enrolled = await _db.Enrollments.AnyAsync(
-                e => e.ClassroomGroupId == resource.ClassroomGroupId && e.LearnerUserId == userId, ct);
-            if (!enrolled)
-                return Forbid();
-        }
+            var (stream, downloadContentType, downloadName) = await _storage.OpenReadAsync(
+                resource.StoredFileName,
+                resource.OriginalFileName,
+                ct);
 
-        var (stream, downloadContentType, downloadName) = await _storage.OpenReadAsync(
-            resource.StoredFileName,
-            resource.OriginalFileName,
-            ct);
-        return File(stream, downloadContentType, downloadName, enableRangeProcessing: true);
+            return File(stream, downloadContentType, downloadName, enableRangeProcessing: true);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return NotFound(new { message = $"File not found in storage: {resource.StoredFileName}", error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error downloading file", error = ex.Message, storedFileName = resource.StoredFileName });
+        }
     }
 
     [HttpGet("all")]
@@ -139,7 +155,8 @@ public class ResourcesController : ControllerBase
                 r.ContentType,
                 r.UploadedAt,
                 ClassroomId = r.ClassroomGroupId,
-                ClassroomName = r.ClassroomGroup != null ? r.ClassroomGroup.Name : string.Empty
+                ClassroomName = r.ClassroomGroup != null ? r.ClassroomGroup.Name : string.Empty,
+                StoredFileName = r.StoredFileName // temporary for debugging
             })
             .ToListAsync(ct);
 
