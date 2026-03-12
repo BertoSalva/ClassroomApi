@@ -5,13 +5,26 @@ public sealed record RegisterRequest(
     string Password,
     string FullName,
     string Role, // SuperAdmin / Teacher / Learner
-    string? AdminId = null
+    string? AdminId = null // optional admin identifier for learners
 );
 
-public sealed record LoginRequest(string? Email, string Password, string? AdminId = null);
+public sealed record LoginRequest(
+    string Email,
+    string Password,
+    string? AdminId = null
+);
 
 public sealed record AuthResponse(string AccessToken, DateTimeOffset ExpiresAt);
 
 public sealed record ForgotPasswordRequest(string Email);
 
-public sealed record ResetPasswordRequest(string Email, string Token, string NewPassword);
+public sealed record ResetPasswordRequest(
+    string Email,
+    string Token,
+    string NewPassword
+);
+
+public sealed record ConfirmEmailCodeRequest(
+    string Email,
+    string Code
+);

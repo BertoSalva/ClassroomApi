@@ -50,13 +50,11 @@ public class ClassroomsController : ControllerBase
             .Include(x => x.Grade)
             .Include(x => x.Subject)
             .AsNoTracking()
-            .OrderBy(x => x.Name)
             .ToListAsync();
 
         var classes = groups
             .Select(x => new ClassroomDto(
                 x.Id,
-                x.Name,
                 x.GradeId,
                 x.Grade != null ? x.Grade.Name : string.Empty,
                 x.SubjectId,
@@ -77,14 +75,12 @@ public class ClassroomsController : ControllerBase
         var groups = await _db.ClassroomGroups
             .Include(x => x.Grade)
             .Include(x => x.Subject)
-            .OrderBy(x => x.Name)
             .AsNoTracking()
             .ToListAsync(ct);
 
         var classes = groups
             .Select(x => new ClassroomDto(
                 x.Id,
-                x.Name,
                 x.GradeId,
                 x.Grade != null ? x.Grade.Name : string.Empty,
                 x.SubjectId,
@@ -110,12 +106,10 @@ public class ClassroomsController : ControllerBase
                 return Forbid();
         }
 
-        var exists = await _db.ClassroomGroups.AnyAsync(c => c.Name == req.Name);
-        if (exists) return BadRequest("Class name already exists.");
+       
 
         var c = new ClassroomGroup
         {
-            Name = req.Name.Trim(),
             GradeId = req.GradeId,
             SubjectId = req.SubjectId,
             TeacherUserId = req.TeacherUserId,
@@ -128,7 +122,6 @@ public class ClassroomsController : ControllerBase
         // return projected DTO to avoid cycles
         var dto = new ClassroomDto(
             c.Id,
-            c.Name,
             c.GradeId,
             c.Grade?.Name ?? string.Empty,
             c.SubjectId,
@@ -157,7 +150,6 @@ public class ClassroomsController : ControllerBase
                 return Forbid();
         }
 
-        classroom.Name = req.Name.Trim();
         classroom.GradeId = req.GradeId;
         classroom.SubjectId = req.SubjectId;
         classroom.TeacherUserId = req.TeacherUserId;
@@ -167,7 +159,6 @@ public class ClassroomsController : ControllerBase
 
         var dto = new ClassroomDto(
             classroom.Id,
-            classroom.Name,
             classroom.GradeId,
             classroom.Grade?.Name ?? string.Empty,
             classroom.SubjectId,
@@ -201,5 +192,37 @@ public class ClassroomsController : ControllerBase
         _db.Enrollments.Add(new Enrollment { ClassroomGroupId = classroomId, LearnerUserId = learnerUserId });
         await _db.SaveChangesAsync();
         return Ok();
+    }
+
+    // DELETE /api/v1/classrooms/123
+    [HttpDelete("{id:int}")]
+    [Authorize(Roles = AppRole.SuperAdmin + "," + AppRole.Teacher)]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct = default)
+    {
+        var classroom = await _db.ClassroomGroups.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (classroom is null) return NotFound("Classroom not found.");
+
+        // Teachers can only delete their own class
+        if (User.IsInRole(AppRole.Teacher))
+        {
+            var appUser = await GetCurrentUserAsync();
+            if (appUser is null) return Unauthorized();
+
+            if (!string.Equals(appUser.Id, classroom.TeacherUserId, StringComparison.Ordinal))
+                return Forbid();
+        }
+
+        _db.ClassroomGroups.Remove(classroom);
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict("Cannot delete classroom because it is referenced by enrollments/resources.");
+        }
+
+        return NoContent();
     }
 }

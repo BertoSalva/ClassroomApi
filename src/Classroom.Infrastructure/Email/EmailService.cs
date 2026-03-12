@@ -16,8 +16,6 @@ public sealed class EmailOptions
     public string FromName { get; set; } = "Classroom API";
     public string FromAddress { get; set; } = "no-reply@example.com";
 
-    // Template must contain two placeholders: {0} = encodedToken, {1} = encodedEmail
-    // Example: "https://app.example.com/reset-password?token={0}&email={1}"
     public string ResetPasswordUrlTemplate { get; set; } = "";
 }
 
@@ -25,6 +23,7 @@ public interface IEmailService
 {
     Task SendAsync(string toEmail, string subject, string htmlBody, CancellationToken cancellationToken = default);
     Task SendPasswordResetAsync(string toEmail, string token, CancellationToken cancellationToken = default);
+    Task SendEmailConfirmationCodeAsync(string toEmail, string code, CancellationToken cancellationToken = default);
 }
 
 public sealed class EmailService : IEmailService
@@ -51,9 +50,7 @@ public sealed class EmailService : IEmailService
 
         await client.ConnectAsync(_opts.Host, _opts.Port, socket, cancellationToken);
         if (!string.IsNullOrWhiteSpace(_opts.User))
-        {
             await client.AuthenticateAsync(_opts.User, _opts.Password, cancellationToken);
-        }
 
         await client.SendAsync(message, cancellationToken);
         await client.DisconnectAsync(true, cancellationToken);
@@ -61,7 +58,6 @@ public sealed class EmailService : IEmailService
 
     public async Task SendPasswordResetAsync(string toEmail, string token, CancellationToken cancellationToken = default)
     {
-        // Ensure template exists
         if (string.IsNullOrWhiteSpace(_opts.ResetPasswordUrlTemplate))
             throw new InvalidOperationException("ResetPasswordUrlTemplate is not configured in Email options.");
 
@@ -76,5 +72,16 @@ public sealed class EmailService : IEmailService
             <p>If you did not request a password reset, you can ignore this email.</p>";
 
         await SendAsync(toEmail, "Reset your password", html, cancellationToken);
+    }
+
+    public Task SendEmailConfirmationCodeAsync(string toEmail, string code, CancellationToken cancellationToken = default)
+    {
+        var html = $@"
+            <p>Hello,</p>
+            <p>Your email verification code is:</p>
+            <h2 style=""letter-spacing:2px"">{WebUtility.HtmlEncode(code)}</h2>
+            <p>This code expires soon. If you did not create this account, ignore this email.</p>";
+
+        return SendAsync(toEmail, "Verify your email", html, cancellationToken);
     }
 }

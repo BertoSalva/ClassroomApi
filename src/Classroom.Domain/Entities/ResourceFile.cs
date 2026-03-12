@@ -12,6 +12,9 @@ public class ResourceFile
     public required string ContentType { get; set; } // application/pdf
     public long SizeBytes { get; set; }
 
+    public DateTimeOffset? ResourceYear { get; set; } // optional
+    public int? Term { get; set; } // optional (e.g., 1-4)
+
     public required string UploadedByUserId { get; set; }
     public DateTimeOffset UploadedAt { get; set; } = DateTimeOffset.UtcNow;
 }

@@ -15,9 +15,32 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<Enrollment> Enrollments => Set<Enrollment>();
     public DbSet<ResourceFile> ResourceFiles => Set<ResourceFile>();
 
+    public DbSet<AdmissionsNumber> AdmissionsNumbers => Set<AdmissionsNumber>();
+
+    public DbSet<TeacherEmailVerificationCode> TeacherEmailVerificationCodes => Set<TeacherEmailVerificationCode>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+
+        builder.Entity<AdmissionsNumber>(e =>
+        {
+            e.ToTable("AdmissionsNumbers");
+            e.Property(x => x.AdminId).HasMaxLength(32).IsRequired();
+            e.HasIndex(x => x.AdminId).IsUnique();
+        });
+
+        builder.Entity<TeacherEmailVerificationCode>(e =>
+        {
+            e.ToTable("TeacherEmailVerificationCodes");
+
+            e.Property(x => x.Email).HasMaxLength(256).IsRequired();
+            e.Property(x => x.Code).HasMaxLength(16).IsRequired();
+            e.Property(x => x.ProtectedIdentityToken).IsRequired();
+
+            e.HasIndex(x => new { x.Email, x.Code }).IsUnique();
+            e.HasIndex(x => x.ExpiresAt);
+        });
 
         builder.Entity<Grade>()
             .HasMany(g => g.Subjects)

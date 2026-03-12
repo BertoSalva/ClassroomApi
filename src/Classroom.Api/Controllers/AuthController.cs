@@ -15,24 +15,33 @@ namespace Classroom.Api.Controllers;
 [Route("api/v1/auth")]
 public class AuthController : ControllerBase
 {
+    private const string TeacherEmailDomain = "@parktownboys.com";
+    private static readonly TimeSpan TeacherVerifyCodeTtl = TimeSpan.FromMinutes(15);
+
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly RoleManager<IdentityRole> _roleManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IJwtTokenService _jwt;
     private readonly IEmailService _emailService;
+    private readonly IAdmissionsValidator _admissions;
+    private readonly ITeacherEmailVerificationStore _teacherVerifyStore;
 
     public AuthController(
         UserManager<ApplicationUser> userManager,
         RoleManager<IdentityRole> roleManager,
         SignInManager<ApplicationUser> signInManager,
         IJwtTokenService jwt,
-        IEmailService emailService)
+        IEmailService emailService,
+        IAdmissionsValidator admissions,
+        ITeacherEmailVerificationStore teacherVerifyStore)
     {
         _userManager = userManager;
         _roleManager = roleManager;
         _signInManager = signInManager;
         _jwt = jwt;
         _emailService = emailService;
+        _admissions = admissions;
+        _teacherVerifyStore = teacherVerifyStore;
     }
 
     [AllowAnonymous]
@@ -45,6 +54,23 @@ public class AuthController : ControllerBase
         var role = req.Role?.Trim();
         if (role is not (AppRole.SuperAdmin or AppRole.Teacher or AppRole.Learner))
             return BadRequest("Role must be SuperAdmin, Teacher, or Learner.");
+
+        if (role == AppRole.Teacher)
+        {
+            var email = req.Email.Trim();
+            if (!email.EndsWith(TeacherEmailDomain, StringComparison.OrdinalIgnoreCase))
+                return BadRequest($"Teacher email address must end with '{TeacherEmailDomain}'.");
+        }
+
+        if (role == AppRole.Learner)
+        {
+            if (string.IsNullOrWhiteSpace(req.AdminId))
+                return BadRequest("AdminId (admission number) is required for Learner registration.");
+
+            var ok = await _admissions.IsValidAsync(req.AdminId, HttpContext.RequestAborted);
+            if (!ok)
+                return BadRequest($"AdminId '{req.AdminId}' was not found in the admissions list. Learner registration is not allowed.");
+        }
 
         if (!await _roleManager.RoleExistsAsync(role))
             await _roleManager.CreateAsync(new IdentityRole(role));
@@ -63,7 +89,41 @@ public class AuthController : ControllerBase
 
         await _userManager.AddToRoleAsync(user, role);
 
+        if (role == AppRole.Teacher)
+        {
+            var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+            var code = _teacherVerifyStore.Issue(user.Email!, token, TeacherVerifyCodeTtl);
+
+            await _emailService.SendEmailConfirmationCodeAsync(user.Email!, code, HttpContext.RequestAborted);
+
+            return Accepted(new
+            {
+                message = "Account created. Enter the verification code sent to your email to activate your Teacher account.",
+                email = user.Email
+            });
+        }
+
         return Ok(new { user.Id, user.Email, user.FullName, Role = role });
+    }
+
+    [AllowAnonymous]
+    [HttpPost("confirm-email-code")]
+    public async Task<IActionResult> ConfirmEmailCode([FromBody] ConfirmEmailCodeRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Code))
+            return BadRequest("Email and code are required.");
+
+        var user = await _userManager.FindByEmailAsync(req.Email.Trim());
+        if (user is null) return BadRequest("Invalid request.");
+
+        if (!_teacherVerifyStore.TryConsume(req.Email, req.Code, out var identityToken))
+            return BadRequest("Invalid or expired verification code.");
+
+        var result = await _userManager.ConfirmEmailAsync(user, identityToken);
+        if (!result.Succeeded)
+            return BadRequest(result.Errors);
+
+        return Ok(new { message = "Email verified. Your account is now active." });
     }
 
     [AllowAnonymous]
@@ -71,6 +131,7 @@ public class AuthController : ControllerBase
     public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest req)
     {
         ApplicationUser? user = null;
+
         if (!string.IsNullOrWhiteSpace(req.Email))
             user = await _userManager.FindByEmailAsync(req.Email);
 
@@ -85,6 +146,9 @@ public class AuthController : ControllerBase
         if (user is null)
             return Unauthorized("Invalid credentials.");
 
+        if (await _userManager.IsInRoleAsync(user, AppRole.Teacher) && !user.EmailConfirmed)
+            return Unauthorized("Please verify your email using the verification code before logging in.");
+
         var ok = await _signInManager.CheckPasswordSignInAsync(user, req.Password, lockoutOnFailure: true);
         if (!ok.Succeeded)
             return Unauthorized("Invalid credentials.");
@@ -93,7 +157,6 @@ public class AuthController : ControllerBase
         return Ok(new AuthResponse(token, expiresAt));
     }
 
-    // POST api/v1/auth/forgot-password
     [AllowAnonymous]
     [HttpPost("forgot-password")]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest req)
@@ -102,18 +165,16 @@ public class AuthController : ControllerBase
             return BadRequest("Email is required.");
 
         var user = await _userManager.FindByEmailAsync(req.Email);
+
         // Do not reveal whether the email exists
         if (user is null)
             return Ok();
 
         var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-        // Send email (service will url-encode token)
-        await _emailService.SendPasswordResetAsync(user.Email, token);
-
+        await _emailService.SendPasswordResetAsync(user.Email!, token, HttpContext.RequestAborted);
         return Ok();
     }
 
-    // POST api/v1/auth/reset-password
     [AllowAnonymous]
     [HttpPost("reset-password")]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest req)
@@ -126,13 +187,12 @@ public class AuthController : ControllerBase
         var user = await _userManager.FindByEmailAsync(req.Email);
         if (user is null) return BadRequest("Invalid request.");
 
-        // Token should arrive URL-decoded by client; ensure safe decoding here
         var decodedToken = WebUtility.UrlDecode(req.Token);
-
         var result = await _userManager.ResetPasswordAsync(user, decodedToken, req.NewPassword);
+
         if (!result.Succeeded)
             return BadRequest(result.Errors);
 
         return Ok();
     }
-    }
+}

@@ -17,4 +17,18 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+
+  <!-- Ensure these files are not treated as default None items -->
+  <ItemGroup>
+    <None Remove="files\**\*" />
+  </ItemGroup>
+
+  <!-- Publish under /files/... in the output -->
+  <ItemGroup>
+    <Content Include="files\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <TargetPath>files/%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </Content>
+  </ItemGroup>
 </Project>

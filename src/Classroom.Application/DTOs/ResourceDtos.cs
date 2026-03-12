@@ -1,7 +1,6 @@
 namespace Classroom.Application.DTOs;
 
 public sealed record CreateClassroomRequest(
-    string Name,
     int GradeId,
     int SubjectId,
     string TeacherUserId,
@@ -13,5 +12,7 @@ public sealed record UploadResourceResponse(
     string Title,
     string OriginalFileName,
     long SizeBytes,
-    DateTimeOffset UploadedAt
+    DateTimeOffset UploadedAt,
+    DateTimeOffset? ResourceYear,
+    int? Term
 );

@@ -20,8 +20,10 @@ public static class DependencyInjection
         services.Configure<JwtOptions>(config.GetSection("Jwt"));
         services.Configure<LocalFileStorageOptions>(config.GetSection("Storage"));
 
+        services.AddMemoryCache();
+
         services.Configure<EmailOptions>(config.GetSection("Email"));
-        services.AddTransient<IEmailService, EmailService>();
+        services.AddScoped<IEmailService, EmailService>();
 
         var conn = config.GetConnectionString("DefaultConnection")
                    ?? config["DATABASE_URL"];
@@ -32,6 +34,9 @@ public static class DependencyInjection
         NpgsqlConnection.GlobalTypeMapper.EnableDynamicJson();
 
         services.AddDbContext<AppDbContext>(o => o.UseNpgsql(conn));
+
+        // DB-backed verification store must be scoped because it uses AppDbContext (scoped).
+        services.AddScoped<ITeacherEmailVerificationStore, TeacherEmailVerificationStore>();
 
         services
             .AddIdentity<ApplicationUser, IdentityRole>(options =>
@@ -47,6 +52,11 @@ public static class DependencyInjection
 
         services.AddScoped<IJwtTokenService, JwtTokenService>();
         services.AddSingleton<IFileStorage, GoogleCloudStorageFileStorage>();
+
+        services.Configure<AdmissionsOptions>(config.GetSection("Admissions"));
+        services.AddScoped<IAdmissionsValidator, DbAdmissionsValidator>();
+
+        services.AddScoped<AdmissionsSeeder>();
 
         return services;
     }

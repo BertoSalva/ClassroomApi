@@ -174,6 +174,10 @@ using (var scope = app.Services.CreateScope())
     var db = services.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
 
+    // Seed admissions numbers (idempotent)
+    var admissionsSeeder = services.GetRequiredService<AdmissionsSeeder>();
+    await admissionsSeeder.SeedAsync();
+
     var roleManager = services.GetRequiredService<RoleManager<IdentityRole>>();
     var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
 

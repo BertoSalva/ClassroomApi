@@ -363,3 +363,9 @@
 # Fody - auto-generated XML schema
 **\FodyWeavers.xsd
 fly.toml
+
+# Ensure admissions workbook is included in Docker build context
+!src/Classroom.Api/files/
+!src/Classroom.Api/files/**
+!src/Classroom.Api/files/*.xls
+!src/Classroom.Api/files/*.xlsx

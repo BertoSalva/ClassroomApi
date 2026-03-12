@@ -6,7 +6,6 @@ namespace Classroom.Domain.Entities;
 public class ClassroomGroup
 {
     public int Id { get; set; }
-    public required string Name { get; set; } // e.g., "Grade 11 Delphi - Term 1"
 
     public int GradeId { get; set; }
     public Grade? Grade { get; set; }

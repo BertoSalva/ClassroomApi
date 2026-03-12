@@ -96,6 +96,8 @@ public class ResourcesController : ControllerBase
             OriginalFileName = file.FileName,
             ContentType = contentType,
             SizeBytes = sizeBytes,
+            ResourceYear = req.ResourceYear,
+            Term = req.Term,
             UploadedByUserId = "",
             UploadedAt = DateTimeOffset.UtcNow
         };
@@ -103,7 +105,15 @@ public class ResourcesController : ControllerBase
         _db.ResourceFiles.Add(res);
         await _db.SaveChangesAsync(ct);
 
-        return Ok(new UploadResourceResponse(res.Id, res.Title, res.OriginalFileName, res.SizeBytes, res.UploadedAt));
+        return Ok(new UploadResourceResponse(
+            res.Id,
+            res.Title,
+            res.OriginalFileName,
+            res.SizeBytes,
+            res.UploadedAt,
+            res.ResourceYear,
+            res.Term
+));
     }
 
     [HttpGet("{resourceId:int}/download")]
@@ -154,9 +164,10 @@ public class ResourcesController : ControllerBase
                 r.SizeBytes,
                 r.ContentType,
                 r.UploadedAt,
+                r.ResourceYear,
+                r.Term,
                 ClassroomId = r.ClassroomGroupId,
-                ClassroomName = r.ClassroomGroup != null ? r.ClassroomGroup.Name : string.Empty,
-                StoredFileName = r.StoredFileName // temporary for debugging
+                StoredFileName = r.StoredFileName
             })
             .ToListAsync(ct);
 
@@ -177,11 +188,42 @@ public class ResourcesController : ControllerBase
                 r.Category,
                 r.OriginalFileName,
                 r.SizeBytes,
-                r.UploadedAt
+                r.UploadedAt,
+                r.ResourceYear,
+                r.Term
             })
             .ToListAsync(ct);
 
         return Ok(resources);
+    }
+
+    // DELETE /api/v1/resources/123
+    [HttpDelete("{resourceId:int}")]
+    [Authorize(Roles = AppRole.SuperAdmin + "," + AppRole.Teacher)]
+    public async Task<IActionResult> Delete(int resourceId, CancellationToken ct)
+    {
+        var res = await _db.ResourceFiles.FirstOrDefaultAsync(r => r.Id == resourceId, ct);
+        if (res is null) return NotFound("Resource not found.");
+
+        // Optional: if Teacher, ensure they own the classroom (matches your other patterns)
+        if (User.IsInRole(AppRole.Teacher))
+        {
+            var classroom = await _db.ClassroomGroups.AsNoTracking()
+                .FirstOrDefaultAsync(c => c.Id == res.ClassroomGroupId, ct);
+
+            if (classroom is null) return NotFound("Classroom not found.");
+
+            var appUser = await GetCurrentUserAsync();
+            if (appUser is null) return Unauthorized();
+
+            if (!string.Equals(appUser.Id, classroom.TeacherUserId, StringComparison.Ordinal))
+                return Forbid();
+        }
+
+        _db.ResourceFiles.Remove(res);
+        await _db.SaveChangesAsync(ct);
+
+        return NoContent();
     }
 }
 
@@ -189,5 +231,7 @@ public class UploadResourceRequest
 {
     [FromForm] public string Title { get; set; } = string.Empty;
     [FromForm] public string Category { get; set; } = string.Empty;
+    [FromForm] public DateTimeOffset? ResourceYear { get; set; }
+    [FromForm] public int? Term { get; set; }
     [FromForm] public IFormFile File { get; set; } = default!;
 }
